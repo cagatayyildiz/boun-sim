@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<data>
+	<name>Simulator Model Parameters</name>
+
+	<params intensity="low">
+		<wait_time_shape>20</wait_time_shape>
+		<wait_time_scale>10</wait_time_scale>
+		<aver_conv_dur_lower>20</aver_conv_dur_lower>
+		<aver_conv_dur_upper>200</aver_conv_dur_upper>
+		<ans_prob_lower>0.8</ans_prob_lower>
+		<ans_prob_upper>1</ans_prob_upper>
+		<reg_period_shape>30</reg_period_shape>
+		<reg_period_scale>10</reg_period_scale>
+		<unreg_dur_shape>2</unreg_dur_shape>
+		<unreg_dur_scale>10</unreg_dur_scale>
+	</params>
+
+	<params intensity="high">
+		<wait_time_shape>5</wait_time_shape>
+		<wait_time_scale>10</wait_time_scale>
+		<aver_conv_dur_lower>20</aver_conv_dur_lower>
+		<aver_conv_dur_upper>200</aver_conv_dur_upper>
+		<ans_prob_lower>0.8</ans_prob_lower>
+		<ans_prob_upper>1</ans_prob_upper>
+		<reg_period_shape>30</reg_period_shape>
+		<reg_period_scale>10</reg_period_scale>
+		<unreg_dur_shape>2</unreg_dur_shape>
+		<unreg_dur_scale>10</unreg_dur_scale>
+	</params>
+
+</data>

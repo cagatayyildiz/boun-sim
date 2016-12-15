@@ -1,0 +1,297 @@
+''' 
+This study is a Bogazici University - NETAS Nova V-Gate collaboration and funded by TEYDEB project "Realization of Anomaly Detection and Prevention with Learning System Architectures, Quality Improvement, High Rate Service Availability and Rich Services in a VoIP Firewall Product'', by the Scientific and Technological Research Council Of Turkey (TUBITAK).
+'''
+
+import pcap
+import threading
+import time
+import pickle
+import numpy as np
+
+import networking
+import packet
+
+from stats import *
+
+
+class Monitor:
+    ''' Monitors the network traffic either by listening to an interface or reading from a pcap/log file.
+    It also sends the statistics such as packet histogram, call events and resource usage to MonitorClient.
+    '''
+    FRAME_LENGTH = 1  # seconds
+
+    def __init__(self, interface, stats_names=(), client_address=None, real_time=True):
+        # Interface
+        self.interface = interface
+        self.client_address = client_address
+        self.real_time = real_time
+        # set running mode
+        self.mode = 'online'
+        if interface.endswith('pcapng') or interface.endswith('pcap'):
+            self.mode = 'offline_pcap'
+        elif interface.endswith('pickle'):
+            self.mode = 'log_file'
+        # Stats
+        self.stats = []
+        for stats_name in stats_names:
+            self.stats.append(Stats.create_by_name(stats_name))
+        self.pcap_stats = [0, 0, 0]
+        # Other
+        self.current_time = None
+        self.running = False
+        self.pcap_handle = pcap.pcapObject()
+        self.file_handler = None
+        self.thread = None
+
+    def stop(self):
+        '''Sleeps Monitor so that it stops listening packets.
+        '''
+        self.running = False
+        if self.thread:
+            self.thread.join()
+        print 'Monitor: listening stopped.'
+        if self.mode == 'online':
+            print self.summary()
+
+    def start_daemon(self):
+        '''This creates a new thread that listens and processes the packets.
+        Thus, it prevents Monitor from waiting for the end of the processing.
+        '''
+        self.thread = threading.Thread(target=self.start)
+        self.thread.setDaemon(True)
+        self.thread.start()
+
+    def start(self):
+        '''This function is used by the newly created thread.
+        The processing of packets are done here.
+        '''
+        # Open Interface
+        try:
+            if self.mode == 'online':
+                snap_len, promisc, to_ms = 1600, True, 100
+                self.pcap_handle.open_live(self.interface, snap_len, promisc, to_ms)
+            elif self.mode == 'offline_pcap':
+                self.pcap_handle.open_offline(self.interface)
+            elif self.mode == 'log_file':
+                self.file_handler = open(self.interface,'r')
+
+        except Exception, e:
+            print 'Monitor: cannot open interface: %s\nMonitor: %s ' % (self.interface,e)
+            return
+        # Initialize time
+        self.current_time = 0 if self.mode else time.time()
+        print 'Monitor: listening on %s ...' % self.interface
+        self.running = True
+
+        # Pcap loop:
+        if self.mode == 'online' or self.mode == 'offline_pcap':
+            while self.running:
+                self.pcap_handle.dispatch(1, self.packet_received)
+            # Pcap stats:
+            self.pcap_stats = self.pcap_handle.stats()
+        # log loop
+        elif self.mode == 'log_file':
+            try:
+                while self.running:
+                    logged_msg = pickle.load(self.file_handler)
+                    message = networking.Message('Stats')
+                    for stat in self.stats:
+                        if stat.name in logged_msg.body:
+                            message.insert(stat.name, logged_msg.body[stat.name])
+                    message.sent_to(self.client_address, proto='TCP')
+                    time.sleep(self.FRAME_LENGTH)
+            except EOFError:
+                print 'End of log file'
+            except KeyError as e:
+                print 'Key error: No ' + e.message + ' in input log file.'
+
+
+    def summary(self):
+        '''prints number of received and dropped packets
+        '''
+        print '%d packets received by filter' % self.pcap_stats[0]
+        print '%d packets dropped by kernel' % self.pcap_stats[1]
+        print '%d packets dropped by interface' % self.pcap_stats[2]
+
+    def packet_received(self, pktlen, buf, timestamp):
+        '''It parses each packet and updates statistics.
+        :param pktlen: packet length
+        :param buf: buffer
+        :param timestamp: arrival time of the packet
+        '''
+        # Parse packet
+        pkt = packet.Packet(timestamp, buf)
+        # Add to each stats collector
+        for s in self.stats:
+            s.add_packet(pkt)
+        # Epoch passed ?
+        if timestamp - self.current_time >= self.FRAME_LENGTH:
+            self.current_time = timestamp
+            self.publish_and_clear_stats()
+            # Simulating real time ?
+            if self.mode == 'offline_pcap' and self.real_time:
+                time.sleep(self.FRAME_LENGTH)
+
+    def publish_and_clear_stats(self):
+        ''' Sends the statistics of packets in an time interval and clears statistics after transmission.
+        '''
+        # Create Message
+        message = networking.Message('Stats')
+        data = []
+        for s in self.stats:
+            # Insert stats
+            s.finalize()
+            message.insert(s.name, s.get_stats())
+        # Send Message
+
+        message.sent_to(self.client_address, proto='TCP')
+        # Clear stats
+        for s in self.stats:
+            s.clear()
+
+
+class MonitorServer(networking.UDPServer):
+    ''' MonitorServer carries the commands from MonitorClient to Monitor.
+    Main function of this is to start and stop the Monitor. If start action is taken,
+    it creates a Monitor object with a new thread to process the packets.
+    When stop action comes, the Monitor object is cleared.
+    '''
+    DEFAULT_PORT = 5010
+
+    def __init__(self, port=0):
+        networking.UDPServer.__init__(self, ('0.0.0.0', port))
+        self.monitor = None
+        self.port = self.server_address[1]
+        print 'MonitorServer: listening on port: %d' % self.port
+
+    def handle_message(self, message, address):
+        '''It processes messages and takes actions of starting or stopping accordingly.
+        :param message: The message that is sent from MonitorClient to Monitor
+        '''
+        action = message.header.lower()
+        if action == 'start' and self.monitor is None:
+            print 'MonitorServer: starting the monitor...'
+            client_address = (address[0], message.body['port'])
+            self.monitor = Monitor(message.body['interface'], message.body['stats names'],
+                                   client_address, message.body['real time'])
+            self.monitor.start_daemon()
+        elif action == 'stop' and self.monitor is not None:
+            print 'MonitorServer: stopping the monitor...'
+            self.monitor.stop()
+            self.monitor = None
+
+
+class MessageHandler(object):
+    ''' MessageHandler handles messages coming from collectors listed
+    in the 'collector_names'. The MonitorClient asks MonitorServer to
+    run the necessary collectors
+    '''
+    def __init__(self, name, stats_names):
+        '''Initializers the MessageHandler.
+            :param name: the name of MessageHandler
+            :param stats_names: the name of statistics that MessageHandler wants to take
+        '''
+        self.name = name
+        self.stats_names = stats_names
+
+    def handle_message(self, message):
+        pass
+
+    def disconnected(self):
+        pass
+
+
+class MonitorClient(networking.TCPServer):
+    '''
+        This class communicates with the MonitorServer such that it triggers Monitor to send network statistics.
+        Then, the MonitorClient distributes the incoming statistics to MessageHandlers.
+    '''
+    DEFAULT_PORT = 5011
+
+    def __init__(self, monitor_server_address, interface, port=0, real_time=True, verbose=False):
+        # Initializer TCPServer
+        networking.TCPServer.__init__(self, ('0.0.0.0', port))
+        self.port = self.server_address[1]
+        print 'MonitorClient: listening on port: %d' % self.port
+        # Monitor Options
+        self.interface = interface
+        self.real_time = real_time
+        self.verbose = verbose
+        self.monitor_server_address = monitor_server_address
+        # Dispatcher
+        self.message_handlers = []
+    
+    def register(self, message_handler):
+        ''' Register a MessageHandler to the MonitorClient to send the messages.
+            :param message_handler: a Message Handler
+        '''
+        self.message_handlers.append(message_handler)
+    
+    def handle_message(self, message, address):
+        ''' HandleMessage sends the messages to the registered MessageHandlers.
+            :param message: a Message
+        '''
+        for handler in self.message_handlers:
+            handler.handle_message(message)
+            if self.verbose:
+                print message.body
+
+    def run_forever(self):
+        '''It runs until self.stop() is called or CTRL+C pressed.
+        '''
+        self.connect()
+        self.listen()
+        self.disconnect()
+
+    def connect(self):
+        '''
+        Collects the features that are going to be created.
+        '''
+        stats_names = set()
+        for handler in self.message_handlers:
+            for name in handler.stats_names:
+                stats_names.add(name)
+        print 'MonitorClient: connecting to %s:%s' % self.monitor_server_address
+        params = {'interface': self.interface, 'port': self.port,
+                  'real time': self.real_time, 'stats names': stats_names}
+        networking.Message('START', params).sent_to(self.monitor_server_address, proto='UDP')
+
+    def disconnect(self):
+        '''Disconnects from MessageHandlers.
+        '''
+        networking.Message('STOP').sent_to(self.monitor_server_address, proto='UDP')
+        # Notify registered message handlers
+        for handler in self.message_handlers:
+            handler.disconnected()
+        print 'MonitorClient:: disconnected'
+
+
+class Logger(MessageHandler):
+    ''' Dumps the data via pickle
+    '''
+    STATS_COLLECTED = ['ResourceUsage', 'PacketHistogram', 'AsteriskLogHistogram']
+    def __init__(self, filename=None):
+        super(Logger, self).__init__('Logger', self.STATS_COLLECTED)
+        if filename is None:
+            filename = 'log_'+time.asctime().replace(' ', '_')+'.pickle'
+        self.filename = filename
+        if filename.endswith('.pickle'):
+            self.file = open(self.filename,'w')
+        else:
+            self.file = open(self.filename+'.pickle','w')
+        self.headers = []
+        for stat in self.STATS_COLLECTED:
+            self.headers += Stats.create_by_name(stat).HEADERS
+        self.data = np.array([]).reshape(0,len(self.headers)) 
+
+    def handle_message(self, message):
+        tmp = []
+        for key in self.STATS_COLLECTED:
+            tmp = tmp + message.body[key].values()
+        self.data = np.vstack((self.data, np.array(tmp)))
+        pickle.dump(message,self.file)
+
+    def disconnected(self):
+        self.file.close()
+        np.savetxt(self.filename+".headers.txt", self.headers, fmt="%s")
+        np.savetxt(self.filename+".data.txt", self.data.T)
