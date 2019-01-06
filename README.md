@@ -19,7 +19,7 @@ This folder contains 4 different data sets, each of which containing 40 DDoS att
 Simulator is a stand-alone program that generates the network traffic by exchanging SIP packets with a SIP server and runs independent of the rest of the modules. To produce SIP packets, we make use of [pjsip](http://www.pjsip.org/), an open source library implementing SIP and many other protocols.
 
 #### Virtual Machine
-Our simulation system together with all dependencies has been installed in a virtual machine. You can right click and choose "save as" for [this link](https://dl.dropboxusercontent.com/u/5464866/BOUN-VM.ova). to download the virtual machine. You can open it with [VirtualBox](https://www.virtualbox.org) and immediately run the simulator. Total download size is 7.1 GB.
+Our simulation system together with all dependencies has been installed in a virtual machine. You can right click and choose "save as" for [this link](https://www.dropbox.com/s/t16wss9gpck4baq/BOUN-VM.ova?dl=0). to download the virtual machine. You can open it with [VirtualBox](https://www.virtualbox.org) and immediately run the simulator. Total download size is 6.6 GB.
 
 ## About the Work
 This study is a Bogazici University - NETAS Nova V-Gate collaboration and funded by TEYDEB project, "Realization of Anomaly Detection and Prevention with Learning System Architectures, Quality Improvement, High Rate Service Availability and Rich Services in a VoIP Firewall Product'', by the Scientific and Technological Research Council Of Turkey (TUBITAK).
